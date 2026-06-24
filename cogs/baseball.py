@@ -2,6 +2,19 @@ import discord
 from discord.ext import commands
 from firebase_admin import db
 
+# 관리자 디스코드 ID 지정
+ADMIN_ID = 742989026625060914
+
+def is_admin():
+    """명령어를 친 유저가 지정된 관리자인지 체크하는 데코레이터"""
+    async def predicate(ctx):
+        if ctx.author.id == ADMIN_ID:
+            return True
+        await ctx.send(f"❌ 권한이 없습니다. 이 명령어는 관리자(<@{ADMIN_ID}>)만 사용할 수 있습니다.")
+        return False
+    return commands.check(predicate)
+
+
 # --- GUI: 선수 기록 조회를 위한 인터랙티브 뷰 ---
 class BaseballStatsView(discord.ui.View):
     def __init__(self):
@@ -19,7 +32,9 @@ class BaseballStatsView(discord.ui.View):
         options = [discord.SelectOption(label=name, description=f"{stats.get('games', 0)}경기 | {stats.get('hits', 0)}안타") for name, stats in data.items()]
         view = discord.ui.View()
         view.add_item(DetailedPlayerSelect("batters", options))
-        await interaction.response.send_message("조회할 타자를 선택하세요:", view=view, ephemeral=True)
+        
+        # 누구든 볼 수 있게 ephemeral=False 설정
+        await interaction.response.send_message("조회할 타자를 선택하세요:", view=view, ephemeral=False)
 
     @discord.ui.button(label="투수 상세 기록 조회", style=discord.ButtonStyle.danger, emoji="⚾")
     async def pitcher_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -33,7 +48,9 @@ class BaseballStatsView(discord.ui.View):
         options = [discord.SelectOption(label=name, description=f"{stats.get('games', 0)}경기 | {stats.get('innings', 0.0)}이닝") for name, stats in data.items()]
         view = discord.ui.View()
         view.add_item(DetailedPlayerSelect("pitchers", options))
-        await interaction.response.send_message("조회할 투수를 선택하세요:", view=view, ephemeral=True)
+        
+        # 누구든 볼 수 있게 ephemeral=False 설정
+        await interaction.response.send_message("조회할 투수를 선택하세요:", view=view, ephemeral=False)
 
 
 # --- GUI: 선수 선택 드롭다운 메뉴 ---
@@ -88,7 +105,6 @@ class DetailedPlayerSelect(discord.ui.Select):
             embed.add_field(name="📈 비율 스탯", value=f"타율(AVG): `{avg:.3f}`\n출루율(OBP): `{obp:.3f}`\n장타율(SLG): `{slg:.3f}`\n**OPS**: **`{ops:.3f}`**", inline=False)
 
         else:
-            # [투수 데이터 파싱]
             g = data.get("games", 0)
             innings = data.get("innings", 0.0)
             w = data.get("wins", 0)
@@ -100,10 +116,10 @@ class DetailedPlayerSelect(discord.ui.Select):
             hr_allowed = data.get("hr_allowed", 0)
             r = data.get("runs", 0)
             er = data.get("er", 0)
-            bb = data.get("bb", 0)        # 사사구
-            ibb = data.get("ibb", 0)      # 고의사구
+            bb = data.get("bb", 0)
+            ibb = data.get("ibb", 0)
             balk = data.get("balk", 0)
-            wp = data.get("wp", 0)        # 폭투
+            wp = data.get("wp", 0)
 
             era = (er * 9) / innings if innings > 0 else 0.0
             whip = (h_allowed + bb) / innings if innings > 0 else 0.0
@@ -114,7 +130,8 @@ class DetailedPlayerSelect(discord.ui.Select):
             embed.add_field(name="제구 및 기타", value=f"탈삼진: {so} | 사사구: {bb} | 고의사구: {ibb}\n보크: {balk} | 폭투(WP): {wp}", inline=False)
             embed.add_field(name="📈 비율 스탯", value=f"평균자책점(ERA): `{era:.2f}`\n이닝당 출루허용률(WHIP): `{whip:.2f}`", inline=False)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # 모두가 볼 수 있도록 ephemeral=False 로 출력
+        await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 class Baseball(commands.Cog):
@@ -123,17 +140,18 @@ class Baseball(commands.Cog):
 
     @commands.command(name="기록실")
     async def open_stats_room(self, ctx):
-        """버튼형 GUI 야구 종합 기록실을 엽니다."""
+        """버튼형 GUI 야구 종합 기록실을 엽니다 (전체 공개)."""
         embed = discord.Embed(
             title="⚾ 야구 베이스볼 스탯 종합 시스템",
-            description="아래 버튼을 누르면 비율 스탯(타율/출루율/장타율/OPS 및 ERA/WHIP)이 자동 계산된 인터랙티브 GUI 창이 열립니다.",
+            description="아래 버튼을 누르면 비율 스탯이 자동 계산된 인터랙티브 GUI 창이 열립니다.\n(이 창의 조회 결과는 모든 멤버에게 공개됩니다.)",
             color=discord.Color.green()
         )
         await ctx.send(embed=embed, view=BaseballStatsView())
 
-    # --- 타자 섹션 ---
+    # --- 타자 섹션 (기록 추가 및 제거 권한 제한) ---
 
     @commands.command(name="타자등록")
+    @is_admin()
     async def register_batter(self, ctx, name: str):
         ref = db.reference(f"baseball/batters/{name}")
         if ref.get() is not None:
@@ -147,8 +165,8 @@ class Baseball(commands.Cog):
         await ctx.send(f"⚾ 타자 `{name}` 선수가 등록되었습니다.")
 
     @commands.command(name="타자기록")
+    @is_admin()
     async def update_batter(self, ctx, name: str = None, games: int = None, ab: int = None, hits: int = None, h2: int = None, h3: int = None, hr: int = None, rbi: int = None, runs: int = None, sb: int = None, bb: int = None, ibb: int = None, so: int = None, sf: int = None, sh: int = None, gdp: int = None, err: int = None, bro: int = None):
-        # 인자(값)를 하나라도 안 적거나 명령어만 치면 사용법 가이드 출력
         if name is None or bro is None:
             embed = discord.Embed(title="🏏 [도움말] !타자기록 입력 순서 가이드", color=discord.Color.blue())
             embed.description = f"값을 입력할 때는 쉼표 없이 **띄어쓰기**로 구분해 주세요.\n\n`!타자기록 [이름] [경기수] [타수] [안타] [2루타] [3루타] [홈런] [타점] [득점] [도루] [볼넷] [고의사구] [삼진] [희생플라이] [희생번트] [병살타] [실책] [주루사]`"
@@ -172,9 +190,22 @@ class Baseball(commands.Cog):
         })
         await ctx.send(f"📈 타자 `{name}` 경기 기록 누적 완료!")
 
-    # --- 투수 섹션 ---
+    @commands.command(name="타자제거")
+    @is_admin()
+    async def delete_batter(self, ctx, name: str):
+        """특정 타자의 데이터를 DB에서 완전히 삭제합니다."""
+        ref = db.reference(f"baseball/batters/{name}")
+        if ref.get() is None:
+            await ctx.send(f"❌ 데이터베이스에 `{name}` 타자가 존재하지 않습니다.")
+            return
+        ref.delete()
+        await ctx.send(f"🗑️ 타자 `{name}` 선수의 모든 누적 기록이 정상적으로 제거되었습니다.")
+
+
+    # --- 투수 섹션 (기록 추가 및 제거 권한 제한) ---
 
     @commands.command(name="투수등록")
+    @is_admin()
     async def register_pitcher(self, ctx, name: str):
         ref = db.reference(f"baseball/pitchers/{name}")
         if ref.get() is not None:
@@ -187,8 +218,8 @@ class Baseball(commands.Cog):
         await ctx.send(f"⚾ 투수 `{name}` 선수가 등록되었습니다.")
 
     @commands.command(name="투수기록")
+    @is_admin()
     async def update_pitcher(self, ctx, name: str = None, games: int = None, innings: float = None, wins: int = None, losses: int = None, saves: int = None, holds: int = None, so: int = None, h_allowed: int = None, hr_allowed: int = None, runs: int = None, er: int = None, bb: int = None, ibb: int = None, balk: int = None, wp: int = None):
-        # 인자(값)를 하나라도 안 적거나 명령어만 치면 사용법 가이드 출력
         if name is None or wp is None:
             embed = discord.Embed(title="⚾ [도움말] !투수기록 입력 순서 가이드", color=discord.Color.red())
             embed.description = f"값을 입력할 때는 쉼표 없이 **띄어쓰기**로 구분해 주세요.\n\n`!투수기록 [이름] [경기수] [이닝] [승] [패] [세이브] [홀드] [탈삼진] [피안타] [피홈런] [실점] [자책점] [사사구] [고의사구] [보크] [폭투]`"
@@ -220,6 +251,18 @@ class Baseball(commands.Cog):
             "wp": data.get("wp", 0) + wp
         })
         await ctx.send(f"📈 투수 `{name}` 경기 기록 누적 완료!")
+
+    @commands.command(name="투수제거")
+    @is_admin()
+    async def delete_pitcher(self, ctx, name: str):
+        """특정 투수의 데이터를 DB에서 완전히 삭제합니다."""
+        ref = db.reference(f"baseball/pitchers/{name}")
+        if ref.get() is None:
+            await ctx.send(f"❌ 데이터베이스에 `{name}` 투수가 존재하지 않습니다.")
+            return
+        ref.delete()
+        await ctx.send(f"🗑️ 투수 `{name}` 선수의 모든 누적 기록이 정상적으로 제거되었습니다.")
+
 
 async def setup(bot):
     await bot.add_cog(Baseball(bot))
